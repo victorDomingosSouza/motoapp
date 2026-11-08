@@ -1,0 +1,222 @@
+package com.example.corridainteligente.ui
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.corridainteligente.data.Criteria
+import com.example.corridainteligente.domain.*
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
+import com.google.maps.android.compose.*
+import java.text.SimpleDateFormat
+import java.util.*
+
+private val Green = Color(0xFF2E7D32)
+private val Amber = Color(0xFFF9A825)
+private val Red = Color(0xFFC62828)
+
+// ===================== ANALISAR =====================
+@Composable
+fun AnalyzeScreen(vm: MainViewModel) {
+    val form = vm.form
+    val criteria by vm.criteria.collectAsState()
+    val analysis = remember(form, criteria) { form.toOffer()?.let { Evaluator.evaluate(it, criteria) } }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let(vm::runOcr)
+    }
+    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(Unit) { locationPermission.launch(android.Manifest.permission.ACCESS_FINE_LOCATION) }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Analisar corrida", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+
+        Button(
+            onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            enabled = !vm.reading, modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (vm.reading) "Lendo..." else "Ler print da oferta (OCR)") }
+
+        vm.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+        NumField("Valor da corrida (R$)", form.fare) { vm.updateForm(form.copy(fare = it)) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumField("Busca (km)", form.pickupKm, Modifier.weight(1f)) { vm.updateForm(form.copy(pickupKm = it)) }
+            NumField("Busca (min)", form.pickupMin, Modifier.weight(1f)) { vm.updateForm(form.copy(pickupMin = it)) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumField("Viagem (km)", form.tripKm, Modifier.weight(1f)) { vm.updateForm(form.copy(tripKm = it)) }
+            NumField("Viagem (min)", form.tripMin, Modifier.weight(1f)) { vm.updateForm(form.copy(tripMin = it)) }
+        }
+
+        if (analysis != null) {
+            VerdictCard(analysis)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = vm::accept, Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Green)) { Text("Aceitei") }
+                OutlinedButton(onClick = vm::reject, Modifier.weight(1f)) { Text("Recusei") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VerdictCard(a: Analysis) {
+    val (color, title) = when (a.verdict) {
+        Verdict.ACCEPT -> Green to "✅ ACEITAR"
+        Verdict.MAYBE -> Amber to "⚠️ ATENÇÃO"
+        Verdict.REJECT -> Red to "❌ RECUSAR"
+    }
+    Column(
+        Modifier.fillMaxWidth().background(color, RoundedCornerShape(16.dp)).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+        Text("Ganho considerado: ${a.earned.brl()}", color = Color.White)
+        Text("Por km: ${a.perKm.brl()}   |   Por hora: ${a.perHour.brl()}", color = Color.White)
+        Text("Tempo total: ${a.offer.totalMin.toInt()} min   |   Distância: ${a.offer.totalKm.f()} km", color = Color.White)
+        a.reasons.forEach { Text("• $it", color = Color.White, fontSize = 13.sp) }
+    }
+}
+
+// ===================== HISTÓRICO =====================
+@Composable
+fun HistoryScreen(vm: MainViewModel) {
+    val stats by vm.stats.collectAsState()
+    val rides by vm.rides.collectAsState()
+    val fmt = remember { SimpleDateFormat("dd/MM HH:mm", Locale("pt", "BR")) }
+
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { Text("Histórico", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Corridas realizadas: ${stats.count}")
+                    Text("Total recebido: ${stats.total.brl()}")
+                    Text("Média por km: ${stats.avgPerKm.brl()}")
+                    Text("Média por hora: ${stats.avgPerHour.brl()}")
+                }
+            }
+        }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Melhores horários", fontWeight = FontWeight.Bold)
+                    if (stats.bestHours.isEmpty()) Text("Sem dados ainda")
+                    stats.bestHours.forEach {
+                        Text("%02d:00 – %s/h (%d corridas)".format(it.hour, it.perHour.brl(), it.count))
+                    }
+                }
+            }
+        }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Melhores regiões", fontWeight = FontWeight.Bold)
+                    if (stats.bestRegions.isEmpty()) Text("Sem dados (permita a localização)")
+                    stats.bestRegions.take(5).forEach {
+                        Text("(%.2f, %.2f) – %s/km (%d corridas)".format(it.lat, it.lng, it.perKm.brl(), it.count))
+                    }
+                }
+            }
+        }
+        item { Text("Corridas", fontWeight = FontWeight.Bold) }
+        items(rides, key = { it.id }) { r ->
+            Card(Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${r.fare.brl()}  •  ${fmt.format(Date(r.timestamp))}")
+                        Text("${r.totalKm.f()} km  •  ${r.totalMin.toInt()} min  •  " +
+                            "${r.perKm.brl()}/km  •  ${r.perHour.brl()}/h", fontSize = 12.sp)
+                    }
+                    TextButton(onClick = { vm.deleteRide(r) }) { Text("Excluir") }
+                }
+            }
+        }
+    }
+}
+
+// ===================== CONFIGURAÇÕES =====================
+@Composable
+fun SettingsScreen(vm: MainViewModel) {
+    val c by vm.criteria.collectAsState()
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Meus critérios", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        SettingField("Mínimo R$/km", c.minPerKm) { vm.saveCriteria(c.copy(minPerKm = it)) }
+        SettingField("Mínimo R$/hora", c.minPerHour) { vm.saveCriteria(c.copy(minPerHour = it)) }
+        SettingField("Valor mínimo da corrida (R$)", c.minFare) { vm.saveCriteria(c.copy(minFare = it)) }
+        SettingField("Distância máx. até o passageiro (km)", c.maxPickupKm) { vm.saveCriteria(c.copy(maxPickupKm = it)) }
+        SettingField("Custo por km (combustível + manutenção)", c.costPerKm) { vm.saveCriteria(c.copy(costPerKm = it)) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = c.useNet, onCheckedChange = { vm.saveCriteria(c.copy(useNet = it)) })
+            Spacer(Modifier.width(8.dp))
+            Text("Calcular ganho líquido (descontar custo por km)")
+        }
+    }
+}
+
+@Composable
+private fun SettingField(label: String, value: Double, onValid: (Double) -> Unit) {
+    var text by remember(value) { mutableStateOf(value.f()) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { text = it; it.replace(',', '.').toDoubleOrNull()?.let(onValid) },
+        label = { Text(label) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+    )
+}
+
+@Composable
+private fun NumField(label: String, value: String, modifier: Modifier = Modifier.fillMaxWidth(), onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value, onValueChange = onChange, label = { Text(label) },
+        singleLine = true, modifier = modifier,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+    )
+}
+
+// ===================== MAPA =====================
+@Composable
+fun MapScreen(vm: MainViewModel) {
+    val stats by vm.stats.collectAsState()
+    val c by vm.criteria.collectAsState()
+    val start = stats.bestRegions.firstOrNull()?.let { LatLng(it.lat, it.lng) } ?: LatLng(-23.5505, -46.6333)
+    val camera = rememberCameraPositionState(key = start) { position = CameraPosition.fromLatLngZoom(start, 11f) }
+
+    Column(Modifier.fillMaxSize()) {
+        Text("Regiões (verde = acima do seu mínimo R$/km)", Modifier.padding(16.dp), fontWeight = FontWeight.Bold)
+        GoogleMap(Modifier.fillMaxSize(), cameraPositionState = camera) {
+            stats.bestRegions.forEach { r ->
+                val good = r.perKm >= c.minPerKm
+                Circle(
+                    center = LatLng(r.lat, r.lng), radius = 600.0,
+                    fillColor = (if (good) Green else Red).copy(alpha = 0.35f),
+                    strokeColor = if (good) Green else Red,
+                )
+                Marker(state = MarkerState(LatLng(r.lat, r.lng)),
+                    title = "${r.perKm.brl()}/km", snippet = "${r.count} corridas")
+            }
+        }
+    }
+}
