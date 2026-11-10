@@ -24,14 +24,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         .flowOn(kotlinx.coroutines.Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.Eagerly, Stats())
 
+    // Teste manual (print). As corridas só entram no histórico pelo monitoramento automático.
     var form by mutableStateOf(OfferForm()); private set
     var message by mutableStateOf<String?>(null); private set
     var reading by mutableStateOf(false); private set
 
     fun updateForm(f: OfferForm) { form = f }
-    fun clearMessage() { message = null }
 
-    /** OCR de um print da oferta (rodando em coroutine, sem travar a UI). */
     fun runOcr(uri: Uri) = viewModelScope.launch {
         reading = true
         try {
@@ -44,20 +43,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } finally { reading = false }
     }
 
-    fun accept() = viewModelScope.launch {
-        val offer = form.toOffer() ?: return@launch
-        val a = Evaluator.evaluate(offer, criteria.value)
-        val loc = lastKnownLocation(getApplication())
-        dao.insert(Ride(
-            timestamp = System.currentTimeMillis(), fare = offer.fare,
-            totalKm = offer.totalKm, totalMin = offer.totalMin,
-            perKm = a.perKm, perHour = a.perHour,
-            lat = loc?.latitude, lng = loc?.longitude,
-        ))
-        form = OfferForm()
-    }
-
-    fun reject() { form = OfferForm() }
     fun deleteRide(r: Ride) = viewModelScope.launch { dao.delete(r) }
     fun saveCriteria(c: Criteria) = viewModelScope.launch { settings.save(c) }
 }

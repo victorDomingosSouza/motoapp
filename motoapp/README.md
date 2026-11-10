@@ -1,33 +1,21 @@
-# Corrida Inteligente
+# Corrida Inteligente — atualização
 
-App Android (Kotlin + Jetpack Compose) que diz se uma corrida compensa: ACEITAR / ATENÇÃO / RECUSAR.
+Extraia por cima da pasta do projeto (`motoapp/`), substituindo os arquivos.
+Não mexe em `gradle.properties`, `local.properties` nem nos arquivos do Gradle.
 
-## Como rodar
-1. Android Studio (Ladybug ou mais novo) → *Open* → pasta `CorridaInteligente`.
-2. Crie uma chave do Maps SDK for Android no Google Cloud e adicione ao `local.properties`:
-   `MAPS_API_KEY=sua_chave`
-3. Sync Gradle e execute em um aparelho/emulador (minSdk 26).
+## Fluxo
+1. Aba **Automático** → "Exibir sobre outros apps" → *Iniciar monitoramento* → autorize a captura.
+2. Oferta no app de corridas → OCR, confirmação em 2 leituras iguais → faixa com veredito,
+   R$/km, R$/min e os dados lidos (valor, km e minutos de busca/viagem).
+3. Oferta diferente → a faixa antiga some na hora; a nova entra depois de confirmada.
+4. Você aceita/recusa no app de corridas. Se aparecer um texto de "corrida aceita" (aba Critérios),
+   a corrida é gravada uma única vez e a faixa some.
 
-## Fluxo automático (principal)
-1. Aba **Automático** → conceda "Exibir sobre outros apps" → **Iniciar monitoramento** → autorize a captura de tela.
-2. Abra o app de corridas e deixe trabalhando. O serviço (`service/MonitorService.kt`) captura a tela
-   a cada ~0,6 s, roda o OCR do ML Kit e interpreta a oferta (`OfferParser`).
-3. Leitura estável em 2 frames seguidos → faixa flutuante com ACEITAR / ATENÇÃO / RECUSAR, ganho por km e por hora.
-4. **Aceitei** no overlay grava a corrida (Room, com localização). A faixa some sozinha quando a oferta sai da tela.
-5. Pare pela notificação ou pela aba Automático. A aba **Manual** (print) continua útil para testar o parser.
+## Economia de bateria
+- Sem oferta: amostra 1x/s uma miniatura 32x56 lida do buffer; OCR só se ≥10% da miniatura mudou de
+  uma vez, ou a cada 6 s como rede de segurança.
+- Com oferta/aceite pendente: 2 amostras/s; OCR com mudança ≥1,5% ou a cada 1,5 s.
+- A área da própria faixa é apagada do frame antes de tudo (nunca vira "oferta").
+- A faixa não recebe toques: não atrapalha o app de corridas.
 
-## Fluxo manual
-- **Analisar**: tire/selecione um print da oferta → ML Kit lê o texto → campos preenchidos (editáveis) →
-  veredito instantâneo. "Aceitei" salva no Room (com localização); "Recusei" limpa.
-- **Histórico**: nº de corridas, total, média R$/km e R$/h, melhores horários e regiões.
-- **Mapa**: células de ~1 km coloridas pelo seu R$/km médio versus seu mínimo.
-- **Critérios** (DataStore): mín. R$/km, mín. R$/h, valor mínimo, busca máxima, custo por km, bruto/líquido.
-
-## Regra de decisão
-ganho = valor − custo/km × (km busca + km viagem)   (ou bruto, se preferir)
-R$/km = ganho / km total · R$/h = ganho / (min busca + min viagem) × 60
-- ACEITAR: passa em todos os critérios · ATENÇÃO: falha em 1 critério · RECUSAR: falha em 2+.
-
-## Ajustando o OCR
-`domain/OfferParser.kt` assume o padrão "R$ 12,50 … 5 min (1,8 km) … 14 min (6,2 km)".
-Cada app tem um layout; ajuste as regex ao seu.
+Banco na versão 2 (R$/hora virou R$/min): o histórico antigo é apagado na primeira execução.

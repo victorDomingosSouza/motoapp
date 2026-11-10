@@ -12,7 +12,7 @@ data class Ride(
     val totalKm: Double,
     val totalMin: Double,
     val perKm: Double,
-    val perHour: Double,
+    val perMin: Double,
     val lat: Double?,
     val lng: Double?,
 )
@@ -25,7 +25,8 @@ interface RideDao {
     fun observeAll(): Flow<List<Ride>>
 }
 
-@Database(entities = [Ride::class], version = 1, exportSchema = false)
+// versão 2: a coluna perHour virou perMin (ganho por minuto)
+@Database(entities = [Ride::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun rideDao(): RideDao
 
@@ -34,7 +35,7 @@ abstract class AppDatabase : RoomDatabase() {
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "corridas.db"
-            ).build().also { instance = it }
+            ).fallbackToDestructiveMigration().build().also { instance = it }
         }
     }
 }

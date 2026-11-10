@@ -20,7 +20,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.corridainteligente.data.Criteria
 import com.example.corridainteligente.domain.*
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
@@ -32,7 +31,7 @@ private val Green = Color(0xFF2E7D32)
 private val Amber = Color(0xFFF9A825)
 private val Red = Color(0xFFC62828)
 
-// ===================== ANALISAR =====================
+// ===================== TESTE MANUAL (sem botões de aceitar/recusar) =====================
 @Composable
 fun AnalyzeScreen(vm: MainViewModel) {
     val form = vm.form
@@ -41,14 +40,16 @@ fun AnalyzeScreen(vm: MainViewModel) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let(vm::runOcr)
     }
-    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-    LaunchedEffect(Unit) { locationPermission.launch(android.Manifest.permission.ACCESS_FINE_LOCATION) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Analisar corrida", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text("Teste manual", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "Serve para conferir como o app lê um print ou simular valores. " +
+            "O histórico é alimentado só pelo monitoramento automático.", fontSize = 13.sp
+        )
 
         Button(
             onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
@@ -67,14 +68,8 @@ fun AnalyzeScreen(vm: MainViewModel) {
             NumField("Viagem (min)", form.tripMin, Modifier.weight(1f)) { vm.updateForm(form.copy(tripMin = it)) }
         }
 
-        if (analysis != null) {
-            VerdictCard(analysis)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = vm::accept, Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Green)) { Text("Aceitei") }
-                OutlinedButton(onClick = vm::reject, Modifier.weight(1f)) { Text("Recusei") }
-            }
-        }
+        if (analysis != null) VerdictCard(analysis)
+        TextButton(onClick = { vm.updateForm(OfferForm()) }) { Text("Limpar campos") }
     }
 }
 
@@ -91,8 +86,8 @@ private fun VerdictCard(a: Analysis) {
     ) {
         Text(title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
         Text("Ganho considerado: ${a.earned.brl()}", color = Color.White)
-        Text("Por km: ${a.perKm.brl()}   |   Por hora: ${a.perHour.brl()}", color = Color.White)
-        Text("Tempo total: ${a.offer.totalMin.toInt()} min   |   Distância: ${a.offer.totalKm.f()} km", color = Color.White)
+        Text("Por km: ${a.perKm.brl()}   |   Por minuto: ${a.perMin.brl()}", color = Color.White)
+        Text("Tempo total: ${a.offer.totalMin.clean()} min   |   Distância: ${a.offer.totalKm.clean()} km", color = Color.White)
         a.reasons.forEach { Text("• $it", color = Color.White, fontSize = 13.sp) }
     }
 }
@@ -112,7 +107,7 @@ fun HistoryScreen(vm: MainViewModel) {
                     Text("Corridas realizadas: ${stats.count}")
                     Text("Total recebido: ${stats.total.brl()}")
                     Text("Média por km: ${stats.avgPerKm.brl()}")
-                    Text("Média por hora: ${stats.avgPerHour.brl()}")
+                    Text("Média por minuto: ${stats.avgPerMin.brl()}")
                 }
             }
         }
@@ -122,7 +117,7 @@ fun HistoryScreen(vm: MainViewModel) {
                     Text("Melhores horários", fontWeight = FontWeight.Bold)
                     if (stats.bestHours.isEmpty()) Text("Sem dados ainda")
                     stats.bestHours.forEach {
-                        Text("%02d:00 – %s/h (%d corridas)".format(it.hour, it.perHour.brl(), it.count))
+                        Text("%02d:00 – %s/min (%d corridas)".format(it.hour, it.perMin.brl(), it.count))
                     }
                 }
             }
@@ -144,8 +139,8 @@ fun HistoryScreen(vm: MainViewModel) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("${r.fare.brl()}  •  ${fmt.format(Date(r.timestamp))}")
-                        Text("${r.totalKm.f()} km  •  ${r.totalMin.toInt()} min  •  " +
-                            "${r.perKm.brl()}/km  •  ${r.perHour.brl()}/h", fontSize = 12.sp)
+                        Text("${r.totalKm.clean()} km  •  ${r.totalMin.clean()} min  •  " +
+                            "${r.perKm.brl()}/km  •  ${r.perMin.brl()}/min", fontSize = 12.sp)
                     }
                     TextButton(onClick = { vm.deleteRide(r) }) { Text("Excluir") }
                 }
@@ -164,7 +159,7 @@ fun SettingsScreen(vm: MainViewModel) {
     ) {
         Text("Meus critérios", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         SettingField("Mínimo R$/km", c.minPerKm) { vm.saveCriteria(c.copy(minPerKm = it)) }
-        SettingField("Mínimo R$/hora", c.minPerHour) { vm.saveCriteria(c.copy(minPerHour = it)) }
+        SettingField("Mínimo R$/min", c.minPerMin) { vm.saveCriteria(c.copy(minPerMin = it)) }
         SettingField("Valor mínimo da corrida (R$)", c.minFare) { vm.saveCriteria(c.copy(minFare = it)) }
         SettingField("Distância máx. até o passageiro (km)", c.maxPickupKm) { vm.saveCriteria(c.copy(maxPickupKm = it)) }
         SettingField("Custo por km (combustível + manutenção)", c.costPerKm) { vm.saveCriteria(c.copy(costPerKm = it)) }
@@ -173,6 +168,20 @@ fun SettingsScreen(vm: MainViewModel) {
             Spacer(Modifier.width(8.dp))
             Text("Calcular ganho líquido (descontar custo por km)")
         }
+
+        HorizontalDivider()
+        Text("Detecção de corrida aceita", fontWeight = FontWeight.Bold)
+        Text(
+            "Depois de uma oferta, se algum destes textos aparecer na tela, a corrida é gravada no histórico. " +
+            "Separe por vírgula e ajuste conforme a tela do seu app logo depois de aceitar.",
+            fontSize = 13.sp,
+        )
+        var signals by remember(c.acceptSignals) { mutableStateOf(c.acceptSignals) }
+        OutlinedTextField(
+            value = signals, onValueChange = { signals = it },
+            label = { Text("Textos de \"corrida aceita\"") }, modifier = Modifier.fillMaxWidth(),
+        )
+        Button(onClick = { vm.saveCriteria(c.copy(acceptSignals = signals)) }) { Text("Salvar textos") }
     }
 }
 
@@ -202,7 +211,9 @@ fun MapScreen(vm: MainViewModel) {
     val stats by vm.stats.collectAsState()
     val c by vm.criteria.collectAsState()
     val start = stats.bestRegions.firstOrNull()?.let { LatLng(it.lat, it.lng) } ?: LatLng(-23.5505, -46.6333)
-    val camera = rememberCameraPositionState(key = start) { position = CameraPosition.fromLatLngZoom(start, 11f) }
+    val camera = rememberCameraPositionState(key = "${start.latitude},${start.longitude}") {
+        position = CameraPosition.fromLatLngZoom(start, 11f)
+    }
 
     Column(Modifier.fillMaxSize()) {
         Text("Regiões (verde = acima do seu mínimo R$/km)", Modifier.padding(16.dp), fontWeight = FontWeight.Bold)

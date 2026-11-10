@@ -12,9 +12,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.corridainteligente.service.MonitorService
@@ -31,7 +31,6 @@ fun MonitorScreen() {
         if (it.resultCode == Activity.RESULT_OK && data != null) MonitorService.start(ctx, it.resultCode, data)
     }
     val permissionsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        // notificação/localização negadas não impedem o uso; segue para a captura de tela
         val mpm = ctx.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projectionLauncher.launch(mpm.createScreenCaptureIntent())
     }
@@ -40,12 +39,12 @@ fun MonitorScreen() {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Monitoramento automático", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(
-            if (running) "🟢 Ativo — toda oferta que aparecer na tela será analisada e você verá o veredito sobre o app."
-            else "🔴 Parado. Ao iniciar, o app lê a tela a cada ~0,6 s e mostra ACEITAR / ATENÇÃO / RECUSAR sobre o app de corridas."
+            if (running) "🟢 Ativo — a faixa aparece sozinha quando uma oferta surgir, e a corrida é gravada quando você aceitar no app de corridas."
+            else "🔴 Parado. Ao iniciar, o app acompanha a tela e mostra ACEITAR / ATENÇÃO / RECUSAR sobre o app de corridas."
         )
 
         if (!hasOverlay) {
-            Text("1) Permita \"Exibir sobre outros apps\" para o aviso flutuante.")
+            Text("1) Permita \"Exibir sobre outros apps\" para a faixa flutuante.")
             Button(onClick = {
                 overlayLauncher.launch(
                     Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}"))
@@ -67,9 +66,10 @@ fun MonitorScreen() {
         }
 
         Text(
-            "Dicas: no overlay, toque em \"Aceitei\" para gravar a corrida no histórico. " +
-            "Quando a oferta some da tela, o aviso fecha sozinho. A captura pede sua autorização " +
-            "a cada vez que você inicia (regra do Android).",
+            "Como funciona: você aceita ou recusa direto no app de corridas. O Corrida Inteligente só observa: " +
+            "se, depois de uma oferta, aparecer na tela um dos textos de \"corrida aceita\" (aba Critérios), " +
+            "ele grava a corrida uma única vez e fecha a faixa. A captura pede sua autorização a cada início " +
+            "(regra do Android).",
             fontSize = 13.sp,
         )
     }
