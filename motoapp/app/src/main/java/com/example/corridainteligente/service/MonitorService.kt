@@ -22,6 +22,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -30,7 +31,8 @@ import com.example.corridainteligente.data.*
 import com.example.corridainteligente.domain.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlin.math.abs
+import kotlinx.coroutines.channels.Channel
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
 /**
@@ -41,6 +43,8 @@ class MonitorService : Service() {
 
     companion object {
         val running = MutableStateFlow(false)
+        val error = MutableStateFlow<String?>(null)
+        val currentAnalysis = MutableStateFlow<Analysis?>(null)
         const val ACTION_STOP = "com.example.corridainteligente.STOP"
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
@@ -48,18 +52,15 @@ class MonitorService : Service() {
         private const val NOTIF_ID = 42
 
         // --- Eficiência: o OCR só roda quando a tela muda de forma relevante ---
-        private const val TICK_IDLE_MS = 1000L          // sem oferta: olha a tela 1x/s (só amostra, sem OCR)
-        private const val TICK_ACTIVE_MS = 500L         // com oferta/aceite pendente: 2x/s
+        private const val SAMPLE_INTERVAL_MS = 100L    // amostragem leve independente do OCR
         private const val CHANGE_IDLE = 0.10f           // 10% da tela mudou de uma vez (ex.: cartão da oferta surgiu)
         private const val CHANGE_ACTIVE = 0.015f        // com oferta na tela, mudança menor já vale (números trocaram)
         private const val HEARTBEAT_IDLE_MS = 6000L     // rede de segurança: 1 OCR a cada 6 s mesmo sem mudança
-        private const val HEARTBEAT_ACTIVE_MS = 1500L
+        private const val HEARTBEAT_ACTIVE_MS = 750L
         private const val GRID_W = 32
         private const val GRID_H = 56
-        private const val PIXEL_DELTA = 28              // diferença de brilho (0..255) para contar como "mudou"
 
-        private const val STABLE_READS_TO_SHOW = 2      // oferta nova só aparece após 2 leituras iguais
-        private const val ABSENT_READS_TO_HIDE = 2
+        private const val CARD_SCENE_CHANGE = 0.18f
         private const val ACCEPT_WINDOW_MS = 60_000L    // tempo para aparecer o sinal de "aceita" após a oferta
 
         fun start(context: Context, resultCode: Int, data: Intent) {
@@ -75,8 +76,6 @@ class MonitorService : Service() {
         }
     }
 
-    private class Pending(val analysis: Analysis, val form: OfferForm, var lastSeen: Long)
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val main = Handler(Looper.getMainLooper())
     private var projection: MediaProjection? = null
@@ -88,6 +87,9 @@ class MonitorService : Service() {
     private var width = 0
     private var height = 0
     private var scale = 1f
+    private var captureMask: Rect? = null
+
+    private data class CapturedFrame(val bitmap: Bitmap, val timestamp: Long, val generation: Long)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -110,9 +112,21 @@ class MonitorService : Service() {
         setupCapture()
         overlay = OverlayView(this)
         running.value = true
+        error.value = null
+        currentAnalysis.value = null
 
         scope.launch { SettingsRepository(this@MonitorService).criteria.collect { criteria = it } }
-        loopJob = scope.launch { captureLoop() }
+        loopJob = scope.launch {
+            try {
+                captureLoop()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("MonitorService", "Monitoramento interrompido", e)
+                error.value = "Monitoramento interrompido. Inicie novamente."
+                withContext(Dispatchers.Main) { stopSelf() }
+            }
+        }
         return START_NOT_STICKY
     }
 
@@ -133,9 +147,9 @@ class MonitorService : Service() {
             .addAction(0, "Parar", stopIntent)
             .build()
 
-        val hasLocation = ContextCompat.checkSelfPermission(
-            this, android.Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
+        val hasLocation = listOf(
+            android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION,
+        ).any { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
         val type = if (Build.VERSION.SDK_INT >= 29) {
             var t = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             if (hasLocation) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
@@ -159,9 +173,13 @@ class MonitorService : Service() {
     // ---------- captura / detecção de mudança ----------
 
     /** Área da faixa (em pixels do frame) que deve ser ignorada. */
-    private fun maskRect(): Rect? = overlay?.bounds?.let { b ->
-        Rect((b.left * scale).toInt(), (b.top * scale).toInt(),
-            (b.right * scale).toInt() + 1, (b.bottom * scale).toInt() + 1)
+    private fun maskRect(): Rect? {
+        overlay?.bounds?.let { b ->
+            val rect = Rect((b.left * scale).toInt(), (b.top * scale).toInt(),
+                (b.right * scale).toInt() + 1, (b.bottom * scale).toInt() + 1)
+            captureMask = captureMask?.apply { union(rect) } ?: rect
+        }
+        return captureMask
     }
 
     /** Miniatura de brilho (32x56) lida direto do buffer, sem copiar a imagem inteira. */
@@ -191,116 +209,145 @@ class MonitorService : Service() {
         return sig
     }
 
-    private fun diffFraction(a: IntArray, b: IntArray): Float {
-        var n = 0
-        for (i in a.indices) if (abs(a[i] - b[i]) > PIXEL_DELTA) n++
-        return n.toFloat() / a.size
-    }
-
-    /** Frame completo para OCR, com a área da faixa pintada de preto. */
+    /** Mascara somente a faixa visível, liberando os pixels quando ela está oculta. */
     private fun toBitmap(image: Image): Bitmap {
         val plane = image.planes[0]
         val rowPadding = plane.rowStride - plane.pixelStride * width
         val tmp = Bitmap.createBitmap(width + rowPadding / plane.pixelStride, height, Bitmap.Config.ARGB_8888)
         tmp.copyPixelsFromBuffer(plane.buffer)
-        maskRect()?.let { Canvas(tmp).drawRect(it, Paint().apply { color = Color.BLACK }) }
+        overlay?.bounds?.let { b ->
+            val rect = Rect((b.left * scale).toInt(), (b.top * scale).toInt(),
+                (b.right * scale).toInt() + 1, (b.bottom * scale).toInt() + 1)
+            Canvas(tmp).drawRect(rect, Paint().apply { color = Color.BLACK })
+        }
         if (rowPadding == 0) return tmp
         return Bitmap.createBitmap(tmp, 0, 0, width, height).also { tmp.recycle() }
     }
 
     // ---------- laço principal ----------
 
-    private suspend fun captureLoop() {
-        var prevSample: IntArray? = null
-        var lastBmp: Bitmap? = null
-        var lastOcrAt = 0L
+    private suspend fun captureLoop(): Unit = coroutineScope {
+        val frames = Channel<CapturedFrame>(Channel.CONFLATED, onUndeliveredElement = { it.bitmap.recycle() })
+        val changes = ScreenChangeDetector(ignoreTopHalf = true)
+        val cardChanges = ScreenChangeDetector(ignoreTopHalf = true)
+        val forceOcr = AtomicBoolean(false)
+        val active = AtomicBoolean(false)
+        val sampler = launch {
+            var previousMask: Rect? = null
+            var lastFrame = Long.MIN_VALUE
+            var lastPostedAt = 0L
+            while (isActive) {
+                delay(SAMPLE_INTERVAL_MS)
+                val image = reader?.acquireLatestImage() ?: continue
+                try {
+                    if (image.timestamp <= lastFrame) continue
+                    lastFrame = image.timestamp
+                    val sig = signature(image)
+                    val mask = captureMask?.let { Rect(it) }
+                    val maskChanged = mask != previousMask
+                    previousMask = mask
+                    val changed = changes.sample(
+                        sig, if (active.get()) CHANGE_ACTIVE else CHANGE_IDLE, maskChanged,
+                    )
+                    // A metade inferior contém os trechos da oferta nos layouts da 99.
+                    // Animações do mapa e a contagem regressiva não invalidam o OCR.
+                    val sceneChanged = cardChanges.sample(sig, CARD_SCENE_CHANGE, maskChanged)
+                    val now = SystemClock.elapsedRealtime()
+                    val heartbeat = now - lastPostedAt >=
+                        (if (active.get()) HEARTBEAT_ACTIVE_MS else HEARTBEAT_IDLE_MS)
+                    if (sceneChanged) {
+                        currentAnalysis.value = null
+                        withContext(Dispatchers.Main) { overlay?.hide() }
+                    }
+                    if (changed || sceneChanged || maskChanged || lastPostedAt == 0L || heartbeat || forceOcr.getAndSet(false)) {
+                        changes.remember(sig)
+                        lastPostedAt = now
+                        val frame = CapturedFrame(toBitmap(image), image.timestamp, cardChanges.generation)
+                        if (frames.trySend(frame).isFailure) frame.bitmap.recycle()
+                    }
+                } finally { image.close() }
+            }
+        }
+        var processedGeneration = -1L
 
-        var shown: OfferForm? = null        // oferta que está na faixa agora
-        var candidate: OfferForm? = null    // oferta nova aguardando confirmação
-        var seen = 0
-        var absent = 0                      // leituras seguidas sem oferta (faixa visível)
-        var pending: Pending? = null        // última oferta exibida, aguardando sinal de "aceita"
+        val display = OfferDisplayTracker()
+        val acceptance = AcceptanceTracker(ACCEPT_WINDOW_MS)
         var ignored: OfferForm? = null      // oferta já gravada: não reexibir
-        var forceOcr = false
 
         try {
-            while (currentCoroutineContext().isActive) {
-                val active = shown != null || candidate != null || pending != null || absent > 0
-                delay(if (active) TICK_ACTIVE_MS else TICK_IDLE_MS)
-                val now = SystemClock.elapsedRealtime()
-
-                pending?.let { if (now - it.lastSeen > ACCEPT_WINDOW_MS) pending = null }
-
-                // 1) amostra barata; só vira bitmap/OCR se a tela mudou "bruscamente"
-                var bmp: Bitmap? = null
-                val image = reader?.acquireLatestImage()
-                if (image != null) {
-                    try {
-                        val sig = signature(image)
-                        val prev = prevSample
-                        val changed = prev == null ||
-                            diffFraction(sig, prev) >= (if (active) CHANGE_ACTIVE else CHANGE_IDLE)
-                        val heartbeat = now - lastOcrAt >= (if (active) HEARTBEAT_ACTIVE_MS else HEARTBEAT_IDLE_MS)
-                        prevSample = sig
-                        if (changed || heartbeat || forceOcr) bmp = toBitmap(image)
-                    } finally { image.close() }
-                } else if (forceOcr) {
-                    bmp = lastBmp   // tela parada: relê o último frame para confirmar
+            for (frame in frames) {
+                if (frame.generation != cardChanges.generation) {
+                    frame.bitmap.recycle()
+                    continue
                 }
-                if (bmp == null) continue
-
-                // 2) OCR
-                lastOcrAt = now
-                val text = try { Ocr.recognize(bmp) } catch (_: Exception) { null }
-                if (bmp !== lastBmp) { lastBmp?.recycle(); lastBmp = bmp }
-                if (text == null) continue
+                val now = SystemClock.elapsedRealtime()
+                if (frame.generation != processedGeneration) {
+                    processedGeneration = frame.generation
+                    display.clear()
+                }
+                val text = try {
+                    withContext(NonCancellable) { Ocr.recognize(frame.bitmap) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("MonitorService", "Falha ao reconhecer captura", e)
+                    null
+                } finally { frame.bitmap.recycle() }
+                currentCoroutineContext().ensureActive()
+                if (text == null || frame.generation != cardChanges.generation) continue
 
                 val form = OfferParser.parse(text)
                 val offer = form.toOffer()?.takeIf { plausible(it) }
 
                 // 3) sinal de corrida aceita -> grava UMA vez e esconde a faixa
-                val p = pending
-                if (p != null && hasAcceptSignal(text)) {
-                    saveRide(p.analysis)
-                    ignored = p.form
-                    pending = null; shown = null; candidate = null
-                    seen = 0; absent = 0; forceOcr = false
+                val event = acceptance.observe(
+                    form.takeIf {
+                        form != ignored && (form.fare.isNotBlank() || form.tripKm.isNotBlank())
+                    },
+                    offer?.let { Evaluator.evaluate(it, criteria) },
+                    hasAcceptSignal(text), now, frame.timestamp,
+                )
+                active.set(offer != null || display.visible != null || acceptance.hasPending)
+                if (event != null) {
+                    currentAnalysis.value = null
+                    withContext(Dispatchers.Main) { overlay?.hide() }
+                    try {
+                        saveRide(event)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.e("MonitorService", "Falha ao salvar aceite", e)
+                        error.value = "Falha ao salvar aceite. Tentando novamente."
+                        forceOcr.set(true)
+                        continue
+                    }
+                    acceptance.recorded()
+                    error.value = null
+                    ignored = event.form
+                    display.clear()
+                    forceOcr.set(false)
                     withContext(Dispatchers.Main) { overlay?.hide() }
                     continue
                 }
 
-                if (offer != null) {
-                    absent = 0
-                    if (form == ignored) continue                 // ainda é a oferta já aceita
-                    ignored = null
-                    if (form == shown) {                          // mesma oferta, nada a fazer
-                        candidate = null; seen = 0; forceOcr = false
-                        pending?.lastSeen = now
-                        continue
+                val visible = display.observe(form.takeIf { offer != null && form != ignored }, now, frame.timestamp, form)
+                if (form != ignored || offer == null) ignored = null
+                val analysis = visible?.toOffer()?.let { Evaluator.evaluate(it, criteria) }
+                if (analysis != currentAnalysis.value) {
+                    withContext(Dispatchers.Main) {
+                        if (frame.generation == cardChanges.generation) {
+                            currentAnalysis.value = analysis
+                            if (analysis == null) overlay?.hide() else overlay?.show(analysis)
+                        }
                     }
-                    if (shown != null) {                          // oferta DIFERENTE: some com a faixa antiga já
-                        shown = null
-                        withContext(Dispatchers.Main) { overlay?.hide() }
-                    }
-                    if (form == candidate) seen++ else { candidate = form; seen = 1 }
-                    if (seen >= STABLE_READS_TO_SHOW) {           // confirmada em 2 leituras
-                        val analysis = Evaluator.evaluate(offer, criteria)
-                        shown = form; candidate = null; seen = 0; forceOcr = false
-                        pending = Pending(analysis, form, now)
-                        withContext(Dispatchers.Main) { overlay?.show(analysis) }
-                    } else forceOcr = true                        // pede a 2ª leitura logo
-                } else {
-                    candidate = null; seen = 0; ignored = null
-                    if (shown != null) {
-                        if (++absent >= ABSENT_READS_TO_HIDE) {   // oferta saiu da tela
-                            shown = null; absent = 0; forceOcr = false
-                            withContext(Dispatchers.Main) { overlay?.hide() }
-                        } else forceOcr = true
-                    } else { absent = 0; forceOcr = false }
                 }
+                forceOcr.set(display.needsConfirmation)
             }
         } finally {
-            lastBmp?.recycle()
+            sampler.cancel()
+            frames.cancel()
+            currentAnalysis.value = null
+            withContext(NonCancellable + Dispatchers.Main) { overlay?.hide() }
         }
     }
 
@@ -315,15 +362,17 @@ class MonitorService : Service() {
             .any { t.contains(it) }
     }
 
-    private fun saveRide(a: Analysis) {
-        scope.launch {
-            val loc = lastKnownLocation(this@MonitorService)
+    private suspend fun saveRide(event: AcceptanceTracker.Event) {
+        withContext(NonCancellable + Dispatchers.IO) {
+            val a = event.analysis
+            val loc = withTimeoutOrNull(2000L) { lastKnownLocation(this@MonitorService) }
             AppDatabase.get(this@MonitorService).rideDao().insert(
                 Ride(
                     timestamp = System.currentTimeMillis(), fare = a.offer.fare,
                     totalKm = a.offer.totalKm, totalMin = a.offer.totalMin,
                     perKm = a.perKm, perMin = a.perMin,
                     lat = loc?.latitude, lng = loc?.longitude,
+                    acceptanceId = event.id,
                 )
             )
         }
@@ -337,6 +386,7 @@ class MonitorService : Service() {
         reader?.close()
         projection?.stop()
         running.value = false
+        currentAnalysis.value = null
         super.onDestroy()
     }
 }

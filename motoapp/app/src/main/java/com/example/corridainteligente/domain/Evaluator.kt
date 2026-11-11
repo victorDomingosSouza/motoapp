@@ -10,6 +10,8 @@ data class Offer(
     val tripKm: Double,
     val pickupMin: Double,
     val tripMin: Double,
+    val stopCount: Int = 0,
+    val negotiable: Boolean = false,
 ) {
     val totalKm get() = pickupKm + tripKm
     val totalMin get() = pickupMin + tripMin   // ir buscar + levar

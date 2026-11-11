@@ -3,12 +3,10 @@ package com.example.corridainteligente.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -16,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -23,12 +22,13 @@ import androidx.compose.ui.unit.sp
 import com.example.corridainteligente.domain.*
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.MapStyleOptions
+import com.example.corridainteligente.R
 import com.google.maps.android.compose.*
 import java.text.SimpleDateFormat
 import java.util.*
 
 private val Green = Color(0xFF2E7D32)
-private val Amber = Color(0xFFF9A825)
 private val Red = Color(0xFFC62828)
 
 // ===================== TESTE MANUAL (sem botões de aceitar/recusar) =====================
@@ -68,27 +68,9 @@ fun AnalyzeScreen(vm: MainViewModel) {
             NumField("Viagem (min)", form.tripMin, Modifier.weight(1f)) { vm.updateForm(form.copy(tripMin = it)) }
         }
 
-        if (analysis != null) VerdictCard(analysis)
+        if (vm.reading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (!vm.reading && analysis != null) AnalysisCard(analysis)
         TextButton(onClick = { vm.updateForm(OfferForm()) }) { Text("Limpar campos") }
-    }
-}
-
-@Composable
-private fun VerdictCard(a: Analysis) {
-    val (color, title) = when (a.verdict) {
-        Verdict.ACCEPT -> Green to "✅ ACEITAR"
-        Verdict.MAYBE -> Amber to "⚠️ ATENÇÃO"
-        Verdict.REJECT -> Red to "❌ RECUSAR"
-    }
-    Column(
-        Modifier.fillMaxWidth().background(color, RoundedCornerShape(16.dp)).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Ganho considerado: ${a.earned.brl()}", color = Color.White)
-        Text("Por km: ${a.perKm.brl()}   |   Por minuto: ${a.perMin.brl()}", color = Color.White)
-        Text("Tempo total: ${a.offer.totalMin.clean()} min   |   Distância: ${a.offer.totalKm.clean()} km", color = Color.White)
-        a.reasons.forEach { Text("• $it", color = Color.White, fontSize = 13.sp) }
     }
 }
 
@@ -208,6 +190,8 @@ private fun NumField(label: String, value: String, modifier: Modifier = Modifier
 // ===================== MAPA =====================
 @Composable
 fun MapScreen(vm: MainViewModel) {
+    val context = LocalContext.current
+    val mapStyle = remember(context) { MapStyleOptions.loadRawResourceStyle(context, R.raw.map_dark) }
     val stats by vm.stats.collectAsState()
     val c by vm.criteria.collectAsState()
     val start = stats.bestRegions.firstOrNull()?.let { LatLng(it.lat, it.lng) } ?: LatLng(-23.5505, -46.6333)
@@ -217,7 +201,8 @@ fun MapScreen(vm: MainViewModel) {
 
     Column(Modifier.fillMaxSize()) {
         Text("Regiões (verde = acima do seu mínimo R$/km)", Modifier.padding(16.dp), fontWeight = FontWeight.Bold)
-        GoogleMap(Modifier.fillMaxSize(), cameraPositionState = camera) {
+        GoogleMap(Modifier.fillMaxSize(), cameraPositionState = camera,
+            properties = MapProperties(mapStyleOptions = mapStyle)) {
             stats.bestRegions.forEach { r ->
                 val good = r.perKm >= c.minPerKm
                 Circle(

@@ -10,11 +10,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.corridainteligente.ui.*
 
 private enum class Tab(val label: String, val icon: ImageVector) {
-    Auto("Automático", Icons.Default.PlayArrow),
+    Auto("Início", Icons.Default.Home),
     Analyze("Manual", Icons.Default.CheckCircle),
     History("Histórico", Icons.Default.DateRange),
     Map("Mapa", Icons.Default.Place),
@@ -24,12 +25,16 @@ private enum class Tab(val label: String, val icon: ImageVector) {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
         setContent {
-            MaterialTheme {
+            CorridaTheme {
                 val vm: MainViewModel = viewModel()
                 var tab by remember { mutableStateOf(Tab.Auto) }
                 Scaffold(bottomBar = {
-                    NavigationBar {
+                    NavigationBar(containerColor = PanelColor) {
                         Tab.entries.forEach {
                             NavigationBarItem(
                                 selected = tab == it, onClick = { tab = it },

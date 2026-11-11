@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
+private const val LEGACY_ACCEPT_SIGNALS = "iniciar corrida, iniciar viagem, cheguei, buscar passageiro, ir até o passageiro"
 
 /** Critérios configuráveis pelo motorista. */
 data class Criteria(
@@ -19,7 +20,7 @@ data class Criteria(
     // Textos que, aparecendo na tela depois de uma oferta, indicam "corrida aceita".
     // Calibre com a tela do seu app logo após aceitar.
     val acceptSignals: String =
-        "iniciar corrida, iniciar viagem, cheguei, buscar passageiro, ir até o passageiro",
+        "corrida aceita, $LEGACY_ACCEPT_SIGNALS",
 )
 
 class SettingsRepository(private val context: Context) {
@@ -35,6 +36,7 @@ class SettingsRepository(private val context: Context) {
 
     val criteria: Flow<Criteria> = context.dataStore.data.map { p ->
         val d = Criteria()
+        val signals = p[K.acceptSignals] ?: d.acceptSignals
         Criteria(
             minPerKm = p[K.minPerKm] ?: d.minPerKm,
             minPerMin = p[K.minPerMin] ?: d.minPerMin,
@@ -42,7 +44,7 @@ class SettingsRepository(private val context: Context) {
             maxPickupKm = p[K.maxPickupKm] ?: d.maxPickupKm,
             costPerKm = p[K.costPerKm] ?: d.costPerKm,
             useNet = p[K.useNet] ?: d.useNet,
-            acceptSignals = p[K.acceptSignals] ?: d.acceptSignals,
+            acceptSignals = if (signals == LEGACY_ACCEPT_SIGNALS) d.acceptSignals else signals,
         )
     }
 

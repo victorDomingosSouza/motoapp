@@ -1,3 +1,9 @@
 <resources>
-    <style name="Theme.CorridaInteligente" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.CorridaInteligente" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#101212</item>
+        <item name="android:navigationBarColor">#1A1C1C</item>
+        <item name="android:windowBackground">#101212</item>
+        <item name="android:colorAccent">#39CE7B</item>
+    </style>
 </resources>

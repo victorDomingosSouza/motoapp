@@ -1,0 +1,9 @@
+<resources>
+    <string name="assistant_title">Assistente de corridas</string>
+    <string name="distance_km">%1$s km</string>
+    <string name="assistant_negotiated">Assistente de corridas · Negocia</string>
+    <plurals name="offer_stops">
+        <item quantity="one">%d parada</item>
+        <item quantity="other">%d paradas</item>
+    </plurals>
+</resources>

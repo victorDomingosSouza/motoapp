@@ -6,13 +6,14 @@ Aplicativo Android independente que analisa ofertas de corrida e ajuda o motoris
 
 ## Sobre o projeto
 
-O Corrida Inteligente transforma informações visíveis em uma oferta de corrida em uma estimativa de ganho por quilômetro e por minuto. O resultado aparece como **ACEITAR**, **ATENÇÃO** ou **RECUSAR**, conforme os limites configurados pelo motorista.
+O Corrida Inteligente transforma informações visíveis em uma oferta de corrida em uma estimativa de ganho por quilômetro e por minuto. O resultado aparece como **CORRIDA BOA**, **ATENÇÃO** ou **RECUSAR**, conforme os limites configurados pelo motorista.
 
 O app não se conecta às APIs da Uber ou da 99 e não aceita corridas pelo usuário. No modo automático, ele usa a captura de tela autorizada pelo Android e OCR para ler a oferta; a decisão e o aceite continuam sendo do motorista.
 
 ## Funcionalidades implementadas
 
 - **Análise manual:** seleciona uma imagem de oferta, extrai o texto com OCR e permite revisar os campos lidos.
+- Leitura de ofertas da 99 com distâncias em metros e quilômetros, Negocia e paradas.
 - **Monitoramento automático:** observa a tela durante uma sessão autorizada e espera duas leituras iguais antes de apresentar uma nova oferta.
 - **Faixa flutuante:** mostra o veredito, os valores lidos e as métricas sem interceptar os toques do app de corridas.
 - **Detecção configurável de aceite:** procura textos definidos pelo usuário na tela após a oferta e registra a corrida uma vez quando encontra um sinal compatível.
@@ -89,14 +90,13 @@ O teste manual permite selecionar uma imagem de oferta e conferir a leitura. Par
 - A leitura depende do layout e do idioma do app de corridas; mudanças na tela podem exigir ajustes no parser.
 - A gravação automática depende de um texto de aceite configurado em **Critérios**. Se o OCR não encontrar esse texto, ou encontrar um termo genérico em outro contexto, uma corrida pode não ser registrada ou ser identificada incorretamente. Calibre e teste os sinais antes de depender do histórico.
 - A captura de tela só funciona durante a sessão autorizada pelo usuário. A localização também depende da permissão correspondente.
-- A migração atual do banco pode apagar o histórico anterior ao atualizar de uma versão antiga. Faça uma cópia dos dados importantes antes de instalar a atualização.
+- As migrações das versões 1 e 2 para a versão 3 preservam o histórico. Os valores antigos de R$/hora são convertidos para R$/min.
 - O mapa mostra regiões aproximadas calculadas a partir do histórico. Cadastro de áreas de conforto e áreas a evitar é uma possibilidade futura, descrita no planejamento do projeto.
 
 ## Próximas ideias
 
 - Permitir cadastrar regiões preferidas e regiões a evitar, incluindo por horário.
-- Criar exemplos de teste para diferentes formatos de oferta e erros comuns de OCR.
-- Tornar a migração do histórico segura entre versões.
+- Ampliar os exemplos de teste para diferentes formatos de oferta e erros comuns de OCR.
 - Ampliar a calibração dos sinais de aceite para diferentes apps de corridas.
 
 ## Portfólio

@@ -11,6 +11,9 @@ import com.example.corridainteligente.data.*
 import com.example.corridainteligente.domain.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = AppDatabase.get(app).rideDao()
@@ -31,16 +34,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun updateForm(f: OfferForm) { form = f }
 
-    fun runOcr(uri: Uri) = viewModelScope.launch {
+    private var ocrJob: Job? = null
+
+    fun runOcr(uri: Uri) {
+        ocrJob?.cancel()
+        form = OfferForm()
+        message = null
         reading = true
-        try {
-            val parsed = OfferParser.parse(Ocr.recognize(getApplication(), uri))
-            form = parsed
-            message = if (parsed.toOffer() == null)
-                "Não consegui ler todos os campos. Complete manualmente." else null
-        } catch (e: Exception) {
-            message = "Falha no OCR: ${e.message}"
-        } finally { reading = false }
+        ocrJob = viewModelScope.launch {
+            try {
+                val parsed = OfferParser.parse(Ocr.recognize(getApplication(), uri))
+                coroutineContext.ensureActive()
+                form = parsed
+                message = if (parsed.toOffer() == null)
+                    "Não consegui ler todos os campos. Complete manualmente." else null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                message = "Falha no OCR: ${e.message}"
+            } finally {
+                if (coroutineContext[Job]?.isActive == true) reading = false
+            }
+        }
     }
 
     fun deleteRide(r: Ride) = viewModelScope.launch { dao.delete(r) }
